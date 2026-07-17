@@ -14,8 +14,24 @@ go get github.com/malcolmston/gltf
 - `.gltf` JSON and `.glb` binary read/write.
 - Accessor decoding (SCALAR/VEC/MAT over all component types) honoring
   `byteOffset`, `byteStride`, `normalized`, and sparse substitutions.
+- Accessor **encoding** (write path): build bufferViews and accessors from typed
+  `[][3]float32`, `[]uint32`, etc. with automatic min/max.
 - Buffer resolution from GLB BIN chunks, base64 `data:` URIs, and external files.
-- Structural validation with descriptive, path-qualified errors.
+- Structural validation with descriptive, path-qualified errors, covering
+  accessor/bufferView bounds, component/type consistency, index ranges, and
+  animation/camera/material/image rules.
+- **Transform math**: TRS → matrix, matrix decompose, quaternion helpers, and
+  world/global matrices up the node hierarchy.
+- **Animation sampling**: evaluate a sampler at time `t` with STEP, LINEAR, and
+  CUBICSPLINE interpolation (quaternion slerp for rotations).
+- **Skinning**: joint matrices from a skin's inverse bind matrices and global
+  joint transforms.
+- **Morph targets**: decode target deltas and weighted-blend helpers.
+- **Image decoding**: decode embedded or data-URI PNG/JPEG images to `image.Image`.
+- **Khronos extensions** (typed structs, parse/encode, unknown-extension
+  round-trip): `KHR_materials_unlit`, `KHR_materials_emissive_strength`,
+  `KHR_materials_transmission`, `KHR_materials_ior`, `KHR_texture_transform`,
+  `KHR_lights_punctual`, and `KHR_materials_pbrSpecularGlossiness`.
 
 ## Reading
 
@@ -84,6 +100,58 @@ if err := doc.Validate(); err != nil {
 
 `Validate` checks required fields and index ranges across the whole document and
 reports every problem with a path like `meshes[0].primitives[0].attributes.POSITION`.
+
+## Scene evaluation
+
+```go
+// World transform of a node (walks the hierarchy to the root).
+world, _ := doc.GlobalMatrix(nodeIndex)
+p := world.TransformPoint(gltf.Vec3{0, 0, 0})
+
+// Compose / decompose a local transform.
+m := gltf.TRS(translation, rotation, scale)
+t, r, s := m.Decompose()
+
+// Sample an animation channel at time t (LINEAR/STEP/CUBICSPLINE, slerp for rotation).
+path, values, _ := doc.SampleChannel(&doc.Animations[0], 0, 1.5)
+_ = doc.ApplyAnimation(&doc.Animations[0], 1.5) // pose nodes in place
+
+// Skinning: joint matrices = globalJointTransform * inverseBindMatrix.
+joints, _ := doc.JointMatrices(skinIndex)
+
+// Morph targets.
+positions, _ := doc.MorphedPositions(&prim, []float64{0.5, 0.25})
+```
+
+## Building geometry (write path)
+
+```go
+doc := &gltf.Document{Asset: gltf.Asset{Version: "2.0"}}
+pos := doc.AddAccessorVec3([][3]float32{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}})
+idx := doc.AddIndicesUint32([]uint32{0, 1, 2})
+// pos and idx are accessor indices with bufferViews and min/max filled in.
+```
+
+## Extensions
+
+```go
+// Read a known extension.
+if unlit := doc.Materials[0].Unlit(); unlit { /* ... */ }
+ior, _ := doc.Materials[0].IOR()
+
+// Write one (unknown extensions are preserved on round-trip).
+doc.Materials[0].SetExtension(gltf.ExtMaterialsEmissiveStrength,
+    gltf.MaterialsEmissiveStrength{EmissiveStrength: 3})
+
+// Punctual lights (document-level array + node reference).
+lights, _ := doc.Lights()
+```
+
+Supported: `KHR_materials_unlit`, `KHR_materials_emissive_strength`,
+`KHR_materials_transmission`, `KHR_materials_ior`, `KHR_texture_transform`,
+`KHR_lights_punctual`, `KHR_materials_pbrSpecularGlossiness`. Any other extension
+is preserved verbatim through the raw `Extensions` field and the
+`ExtensionMap`/`SetExtension` helpers.
 
 ## Documentation
 

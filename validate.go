@@ -52,6 +52,17 @@ func (d *Document) Validate() error {
 		add("asset.version", "required field is empty")
 	}
 
+	// Every required extension must also be listed as used.
+	used := make(map[string]bool, len(d.ExtensionsUsed))
+	for _, e := range d.ExtensionsUsed {
+		used[e] = true
+	}
+	for i, e := range d.ExtensionsRequired {
+		if !used[e] {
+			add(fmt.Sprintf("extensionsRequired[%d]", i), "required extension %q is not listed in extensionsUsed", e)
+		}
+	}
+
 	checkIndex := func(path string, idx *Index, n int, what string) {
 		if idx == nil {
 			return
@@ -108,6 +119,28 @@ func (d *Document) Validate() error {
 			}
 			checkIndex(pp+".indices", prim.Indices, len(d.Accessors), "accessor")
 			checkIndex(pp+".material", prim.Material, len(d.Materials), "material")
+			if prim.Mode != nil && (*prim.Mode < PrimitivePoints || *prim.Mode > PrimitiveTriangleFan) {
+				add(pp+".mode", "unknown primitive mode %d", *prim.Mode)
+			}
+			// An index accessor must be a scalar of an unsigned integer type.
+			if prim.Indices != nil && *prim.Indices >= 0 && *prim.Indices < len(d.Accessors) {
+				ia := &d.Accessors[*prim.Indices]
+				if ia.Type != AccessorScalar {
+					add(pp+".indices", "index accessor must be SCALAR, got %s", ia.Type)
+				}
+				switch ia.ComponentType {
+				case ComponentUnsignedByte, ComponentUnsignedShort, ComponentUnsignedInt:
+				default:
+					add(pp+".indices", "index accessor must have an unsigned integer component type, got %s", ia.ComponentType)
+				}
+			}
+			for ti, target := range prim.Targets {
+				for name, ai := range target {
+					if ai < 0 || ai >= len(d.Accessors) {
+						add(fmt.Sprintf("%s.targets[%d].%s", pp, ti, name), "accessor index %d out of range [0,%d)", ai, len(d.Accessors))
+					}
+				}
+			}
 		}
 	}
 
@@ -124,10 +157,48 @@ func (d *Document) Validate() error {
 			add(ap+".count", "count must be positive, got %d", a.Count)
 		}
 		checkIndex(ap+".bufferView", a.BufferView, len(d.BufferViews), "bufferView")
+		// normalized is not allowed for FLOAT or UNSIGNED_INT component types.
+		if a.Normalized && (a.ComponentType == ComponentFloat || a.ComponentType == ComponentUnsignedInt) {
+			add(ap+".normalized", "normalized must not be set for component type %s", a.ComponentType)
+		}
+		// min/max, when present, must match the component count.
+		if cc := a.Type.ComponentCount(); cc > 0 {
+			if len(a.Min) != 0 && len(a.Min) != cc {
+				add(ap+".min", "min has %d components, want %d", len(a.Min), cc)
+			}
+			if len(a.Max) != 0 && len(a.Max) != cc {
+				add(ap+".max", "max has %d components, want %d", len(a.Max), cc)
+			}
+		}
+		// The accessor's elements must fit inside the referenced bufferView.
+		if a.BufferView != nil && *a.BufferView >= 0 && *a.BufferView < len(d.BufferViews) {
+			bv := &d.BufferViews[*a.BufferView]
+			cc := a.Type.ComponentCount()
+			cs := a.ComponentType.SizeInBytes()
+			if cc > 0 && cs > 0 && a.Count > 0 {
+				elem := cc * cs
+				stride := bv.ByteStride
+				if stride == 0 {
+					stride = elem
+				}
+				need := a.ByteOffset + (a.Count-1)*stride + elem
+				if need > bv.ByteLength {
+					add(ap, "accessor requires %d bytes but bufferView %d is only %d bytes", need, *a.BufferView, bv.ByteLength)
+				}
+			}
+		}
 		if a.Sparse != nil {
 			s := a.Sparse
 			if s.Count <= 0 {
 				add(ap+".sparse.count", "sparse count must be positive, got %d", s.Count)
+			}
+			if s.Count > a.Count {
+				add(ap+".sparse.count", "sparse count %d exceeds accessor count %d", s.Count, a.Count)
+			}
+			switch s.Indices.ComponentType {
+			case ComponentUnsignedByte, ComponentUnsignedShort, ComponentUnsignedInt:
+			default:
+				add(ap+".sparse.indices.componentType", "must be an unsigned integer type, got %s", s.Indices.ComponentType)
 			}
 			if s.Indices.BufferView < 0 || s.Indices.BufferView >= len(d.BufferViews) {
 				add(ap+".sparse.indices.bufferView", "bufferView index %d out of range [0,%d)", s.Indices.BufferView, len(d.BufferViews))
@@ -143,9 +214,19 @@ func (d *Document) Validate() error {
 		bp := fmt.Sprintf("bufferViews[%d]", i)
 		if bv.Buffer < 0 || bv.Buffer >= len(d.Buffers) {
 			add(bp+".buffer", "buffer index %d out of range [0,%d)", bv.Buffer, len(d.Buffers))
+		} else if bv.ByteLength > 0 {
+			// The view must lie within its buffer's declared byte length.
+			end := bv.ByteOffset + bv.ByteLength
+			if bv.ByteOffset < 0 || end > d.Buffers[bv.Buffer].ByteLength {
+				add(bp, "view [%d,%d) exceeds buffer %d length %d", bv.ByteOffset, end, bv.Buffer, d.Buffers[bv.Buffer].ByteLength)
+			}
 		}
 		if bv.ByteLength <= 0 {
 			add(bp+".byteLength", "byteLength must be positive, got %d", bv.ByteLength)
+		}
+		// byteStride, when present, must be a multiple of 4 in [4,252].
+		if bv.ByteStride != 0 && (bv.ByteStride < 4 || bv.ByteStride > 252 || bv.ByteStride%4 != 0) {
+			add(bp+".byteStride", "byteStride %d must be a multiple of 4 in [4,252]", bv.ByteStride)
 		}
 	}
 
@@ -164,7 +245,17 @@ func (d *Document) Validate() error {
 
 	for i := range d.Images {
 		img := &d.Images[i]
-		checkIndex(fmt.Sprintf("images[%d].bufferView", i), img.BufferView, len(d.BufferViews), "bufferView")
+		ip := fmt.Sprintf("images[%d]", i)
+		checkIndex(ip+".bufferView", img.BufferView, len(d.BufferViews), "bufferView")
+		switch {
+		case img.URI == "" && img.BufferView == nil:
+			add(ip, "image must specify either uri or bufferView")
+		case img.URI != "" && img.BufferView != nil:
+			add(ip, "image must not specify both uri and bufferView")
+		}
+		if img.BufferView != nil && img.MimeType == "" {
+			add(ip+".mimeType", "mimeType is required for a bufferView-backed image")
+		}
 	}
 
 	for i := range d.Skins {
@@ -178,6 +269,17 @@ func (d *Document) Validate() error {
 		for j, joint := range sk.Joints {
 			if joint < 0 || joint >= len(d.Nodes) {
 				add(fmt.Sprintf("%s.joints[%d]", sp, j), "node index %d out of range [0,%d)", joint, len(d.Nodes))
+			}
+		}
+		// The inverse bind matrices accessor must be MAT4 with one entry per
+		// joint.
+		if sk.InverseBindMatrices != nil && *sk.InverseBindMatrices >= 0 && *sk.InverseBindMatrices < len(d.Accessors) {
+			ibm := &d.Accessors[*sk.InverseBindMatrices]
+			if ibm.Type != AccessorMat4 {
+				add(sp+".inverseBindMatrices", "accessor must be MAT4, got %s", ibm.Type)
+			}
+			if ibm.Count < len(sk.Joints) {
+				add(sp+".inverseBindMatrices", "accessor has %d matrices for %d joints", ibm.Count, len(sk.Joints))
 			}
 		}
 	}
@@ -196,11 +298,36 @@ func (d *Document) Validate() error {
 		for j := range an.Samplers {
 			s := &an.Samplers[j]
 			sp := fmt.Sprintf("%s.samplers[%d]", anp, j)
-			if s.Input < 0 || s.Input >= len(d.Accessors) {
+			inOK := s.Input >= 0 && s.Input < len(d.Accessors)
+			outOK := s.Output >= 0 && s.Output < len(d.Accessors)
+			if !inOK {
 				add(sp+".input", "accessor index %d out of range [0,%d)", s.Input, len(d.Accessors))
 			}
-			if s.Output < 0 || s.Output >= len(d.Accessors) {
+			if !outOK {
 				add(sp+".output", "accessor index %d out of range [0,%d)", s.Output, len(d.Accessors))
+			}
+			switch s.Interpolation {
+			case "", InterpolationLinear, InterpolationStep, InterpolationCubicSpline:
+			default:
+				add(sp+".interpolation", "unknown interpolation %q", s.Interpolation)
+			}
+			// The input accessor must be a scalar float keyframe-time buffer.
+			if inOK {
+				in := &d.Accessors[s.Input]
+				if in.Type != AccessorScalar || in.ComponentType != ComponentFloat {
+					add(sp+".input", "input accessor must be SCALAR FLOAT, got %s %s", in.Type, in.ComponentType)
+				}
+				// The output count must be a multiple of the keyframe count
+				// (three times for CUBICSPLINE, which stores tangents).
+				if outOK && in.Count > 0 {
+					factor := in.Count
+					if s.GetInterpolation() == InterpolationCubicSpline {
+						factor *= 3
+					}
+					if factor > 0 && d.Accessors[s.Output].Count%factor != 0 {
+						add(sp+".output", "output count %d is not a multiple of keyframe count %d", d.Accessors[s.Output].Count, factor)
+					}
+				}
 			}
 		}
 	}
@@ -208,6 +335,11 @@ func (d *Document) Validate() error {
 	for i := range d.Materials {
 		m := &d.Materials[i]
 		mp := fmt.Sprintf("materials[%d]", i)
+		switch m.AlphaMode {
+		case "", AlphaOpaque, AlphaMask, AlphaBlend:
+		default:
+			add(mp+".alphaMode", "unknown alpha mode %q", m.AlphaMode)
+		}
 		if m.PBRMetallicRoughness != nil {
 			pbr := m.PBRMetallicRoughness
 			if pbr.BaseColorTexture != nil {
@@ -235,10 +367,32 @@ func (d *Document) Validate() error {
 		case CameraTypePerspective:
 			if c.Perspective == nil {
 				add(cp, "perspective camera missing perspective properties")
+			} else {
+				pc := c.Perspective
+				if pc.YFOV <= 0 {
+					add(cp+".perspective.yfov", "yfov must be positive, got %g", pc.YFOV)
+				}
+				if pc.ZNear <= 0 {
+					add(cp+".perspective.znear", "znear must be positive, got %g", pc.ZNear)
+				}
+				if pc.ZFar != nil && *pc.ZFar <= pc.ZNear {
+					add(cp+".perspective.zfar", "zfar %g must be greater than znear %g", *pc.ZFar, pc.ZNear)
+				}
+				if pc.AspectRatio != nil && *pc.AspectRatio <= 0 {
+					add(cp+".perspective.aspectRatio", "aspectRatio must be positive, got %g", *pc.AspectRatio)
+				}
 			}
 		case CameraTypeOrthographic:
 			if c.Orthographic == nil {
 				add(cp, "orthographic camera missing orthographic properties")
+			} else {
+				oc := c.Orthographic
+				if oc.XMag == 0 || oc.YMag == 0 {
+					add(cp+".orthographic", "xmag and ymag must be non-zero")
+				}
+				if oc.ZFar <= oc.ZNear {
+					add(cp+".orthographic.zfar", "zfar %g must be greater than znear %g", oc.ZFar, oc.ZNear)
+				}
 			}
 		default:
 			add(cp+".type", "unknown camera type %q", c.Type)

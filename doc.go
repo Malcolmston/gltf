@@ -41,10 +41,41 @@
 //   - [Document.DecodeAccessorUint32] and [Document.DecodeIndices] return
 //     unsigned integer index data.
 //
+// The Add* methods provide the write path: [Document.AddAccessorVec3],
+// [Document.AddAccessorVec2], [Document.AddAccessorVec4],
+// [Document.AddAccessorFloat32], and [Document.AddIndicesUint32] append typed
+// data to buffer 0 as a new bufferView and accessor, computing min/max.
+//
+// # Scene evaluation
+//
+// The transform helpers work with a column-major [Mat4], a [Quat] rotation, and
+// [Vec3] vectors. [TRS] composes a transform; [Mat4.Decompose] recovers it;
+// [Node.LocalMatrix] and [Document.GlobalMatrix] give local and world
+// transforms. [Document.EvaluateSampler] and [Document.SampleChannel] evaluate
+// animation channels (STEP, LINEAR, and CUBICSPLINE, with quaternion [Slerp]
+// for rotations), and [Document.ApplyAnimation] poses nodes in place.
+// [Document.JointMatrices] computes skinning matrices, and
+// [Document.MorphedPositions] blends morph targets.
+//
+// # Extensions
+//
+// Named Khronos extensions are modeled by typed structs (for example
+// [MaterialsUnlit], [MaterialsTransmission], [TextureTransform], and
+// [LightsPunctual]) with parse/encode helpers [GetExtension] and [SetExtension];
+// unknown extensions round-trip verbatim through [ExtensionMap] and
+// [MarshalExtensions].
+//
+// # Images
+//
+// [Document.DecodeImage] decodes embedded, data-URI, and external PNG/JPEG
+// images to an [image.Image].
+//
 // # Validation
 //
-// [Document.Validate] performs required-field and index-range checks, returning
-// a [ValidationErrors] value that lists every problem with a descriptive path.
+// [Document.Validate] performs required-field, index-range, and structural
+// consistency checks (accessor and bufferView bounds, component/type rules,
+// animation, camera, material, image, and skin constraints), returning a
+// [ValidationErrors] value that lists every problem with a descriptive path.
 //
 // # Building
 //

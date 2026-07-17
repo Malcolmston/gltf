@@ -253,6 +253,30 @@ func (d *Document) decodeVecN(index int, want AccessorType, n int) ([]float32, e
 	return d.DecodeAccessorFloat32(index)
 }
 
+// DecodeAccessorMat4 decodes a MAT4 accessor into a slice of column-major
+// [Mat4] matrices. It is the correct decoder for a skin's inverse bind
+// matrices.
+func (d *Document) DecodeAccessorMat4(index int) ([]Mat4, error) {
+	a, err := d.accessorAt(index)
+	if err != nil {
+		return nil, err
+	}
+	if a.Type != AccessorMat4 {
+		return nil, fmt.Errorf("gltf: accessor %d is %s, want %s", index, a.Type, AccessorMat4)
+	}
+	flat, err := d.DecodeAccessorFloat32(index)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Mat4, len(flat)/16)
+	for i := range out {
+		for c := 0; c < 16; c++ {
+			out[i][c] = float64(flat[i*16+c])
+		}
+	}
+	return out, nil
+}
+
 // DecodeAccessorUint32 decodes an accessor with an unsigned-integer component
 // type into a flat slice of uint32 values (length Count*ComponentCount). It is
 // the correct decoder for index accessors (SCALAR UNSIGNED_BYTE/SHORT/INT).
