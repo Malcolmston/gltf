@@ -1,0 +1,10 @@
+{
+  "repo": "gltf",
+  "upstream": "KhronosGroup/glTF",
+  "parityBefore": "94%",
+  "parityAfter": "100%",
+  "upstreamCasesSynced": 36,
+  "gapsFound": 2,
+  "gapsClosed": 2,
+  "asOf": "2026-07-18"
+}

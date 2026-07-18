@@ -206,6 +206,7 @@ func (d *Document) Validate() error {
 			if s.Values.BufferView < 0 || s.Values.BufferView >= len(d.BufferViews) {
 				add(ap+".sparse.values.bufferView", "bufferView index %d out of range [0,%d)", s.Values.BufferView, len(d.BufferViews))
 			}
+			d.validateSparseIndices(a, ap, add)
 		}
 	}
 
@@ -403,6 +404,59 @@ func (d *Document) Validate() error {
 		return nil
 	}
 	return errs
+}
+
+// validateSparseIndices enforces the runtime rules the glTF 2.0 specification
+// places on a sparse accessor's index array: the decoded indices MUST form a
+// strictly increasing sequence and none of them MUST be greater than or equal
+// to the base accessor's element count. Both rules require the index data
+// itself, so the check runs only when the referenced bufferView is in range and
+// its backing buffer has been resolved (via ResolveBuffers, Open, or OpenGLB);
+// otherwise it is skipped so that structural validation still works on
+// documents whose buffers have not been loaded.
+func (d *Document) validateSparseIndices(a *Accessor, ap string, add func(string, string, ...any)) {
+	s := a.Sparse
+	if s.Count <= 0 {
+		return
+	}
+	if s.Indices.BufferView < 0 || s.Indices.BufferView >= len(d.BufferViews) {
+		return
+	}
+	idxSize := s.Indices.ComponentType.SizeInBytes()
+	if idxSize == 0 {
+		return
+	}
+	_, idxBuf, err := d.resolveBufferView(s.Indices.BufferView)
+	if err != nil {
+		// Buffers not resolved (or out of range already reported); the
+		// strictly-increasing/in-range rules cannot be checked without data.
+		return
+	}
+	idxBV := &d.BufferViews[s.Indices.BufferView]
+	idxBase := idxBV.ByteOffset + s.Indices.ByteOffset
+
+	prev := int64(-1)
+	for j := 0; j < s.Count; j++ {
+		off := idxBase + j*idxSize
+		if off < 0 || off+idxSize > len(idxBuf) {
+			// Out-of-bounds reads are reported elsewhere; stop here.
+			return
+		}
+		v, err := componentToUint64(idxBuf[off:], s.Indices.ComponentType)
+		if err != nil {
+			return
+		}
+		cur := int64(v)
+		if cur <= prev {
+			add(fmt.Sprintf("%s.sparse.indices[%d]", ap, j),
+				"sparse indices must be strictly increasing, but %d follows %d", cur, prev)
+		}
+		if a.Count >= 0 && cur >= int64(a.Count) {
+			add(fmt.Sprintf("%s.sparse.indices[%d]", ap, j),
+				"sparse index %d is not less than accessor count %d", cur, a.Count)
+		}
+		prev = cur
+	}
 }
 
 // checkTextureRef validates a texture index used by a material.
