@@ -3,6 +3,38 @@
 All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0]
+
+Further expansion toward glTF 2.0 rendering parity. All additions are pure
+standard library, deterministic, and covered by known-answer tests.
+
+### Added
+
+- **Vector and quaternion math** (`vecmath.go`): `Vec3` arithmetic
+  (`Add`, `Sub`, `Scale`, `Dot`, `Cross`, `Length`, `Normalize`, `Lerp`);
+  quaternion operations (`Quat.Mul`, `Quat.Conjugate`, `Quat.Dot`,
+  `Quat.Rotate`, `QuatFromAxisAngle`, `QuatFromEuler`); matrix helpers
+  (`Mat4.Transpose`, `Mat4.TransformDir`); and view/projection builders
+  `LookAt`, `Perspective`, and `Orthographic`.
+- **Camera projection matrices** (`camera.go`): `Camera.ProjectionMatrix`,
+  `CameraPerspective.ProjectionMatrix`, and
+  `CameraOrthographic.ProjectionMatrix`, following the glTF 2.0 camera
+  conventions (finite and infinite far planes).
+- **Bounding boxes** (`bounds.go`): a `Box` axis-aligned bounding-box type with
+  `EmptyBox`, `Add`, `Union`, `Center`, `Size`, `Contains`, `Empty`, and
+  `Transform`; plus `Document.AccessorBounds`, `Document.PrimitiveBounds`, and
+  `Document.SceneBounds` (world-space scene extent).
+- **Scene traversal** (`scene.go`): `Document.RootNodes`,
+  `Document.GlobalMatrices` (world transforms for every node, cycle-detecting),
+  and `Document.NodesInScene`.
+- **Additional PBR material extensions** (`extensions_ext.go`): typed
+  `MaterialsClearcoat`, `MaterialsSheen`, `MaterialsSpecular`, and
+  `MaterialsVolume` structs with matching `Material.Clearcoat`,
+  `Material.Sheen`, `Material.Specular`, and `Material.Volume` accessors
+  (`KHR_materials_clearcoat`, `_sheen`, `_specular`, `_volume`).
+- **Enum names** (`enums_ext.go`): `String` methods for `PrimitiveMode`,
+  `Filter`, `WrapMode`, and `TargetType`.
+
 ## [0.2.0]
 
 Major expansion toward full glTF 2.0 parity. All additions are pure standard
